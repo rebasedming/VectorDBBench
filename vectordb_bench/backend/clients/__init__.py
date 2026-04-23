@@ -33,6 +33,7 @@ class DB(Enum):
     PgVectoRS = "PgVectoRS"
     PgVectorScale = "PgVectorScale"
     PgDiskANN = "PgDiskANN"
+    PgSearch = "PgSearch"
     AlloyDB = "AlloyDB"
     Redis = "Redis"
     MemoryDB = "MemoryDB"
@@ -120,6 +121,11 @@ class DB(Enum):
             from .pgdiskann.pgdiskann import PgDiskANN
 
             return PgDiskANN
+
+        if self == DB.PgSearch:
+            from .pg_search.pg_search import PgSearch
+
+            return PgSearch
 
         if self == DB.Redis:
             from .redis.redis import Redis
@@ -323,6 +329,11 @@ class DB(Enum):
             from .pgdiskann.config import PgDiskANNConfig
 
             return PgDiskANNConfig
+
+        if self == DB.PgSearch:
+            from .pg_search.config import PgSearchConfig
+
+            return PgSearchConfig
 
         if self == DB.Redis:
             from .redis.config import RedisConfig
@@ -537,6 +548,11 @@ class DB(Enum):
             from .pgdiskann.config import _pgdiskann_case_config
 
             return _pgdiskann_case_config.get(index_type)
+
+        if self == DB.PgSearch:
+            from .pg_search.config import PgSearchIndexConfig
+
+            return PgSearchIndexConfig
 
         if self == DB.AlloyDB:
             from .alloydb.config import _alloydb_case_config

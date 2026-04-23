@@ -20,6 +20,7 @@ from ..backend.clients.memorydb.cli import MemoryDB
 from ..backend.clients.milvus.cli import MilvusAutoIndex
 from ..backend.clients.oceanbase.cli import OceanBaseHNSW, OceanBaseIVF
 from ..backend.clients.oss_opensearch.cli import OSSOpenSearch
+from ..backend.clients.pg_search.cli import PgSearch
 from ..backend.clients.pgdiskann.cli import PgDiskAnn
 from ..backend.clients.pgvecto_rs.cli import PgVectoRSHNSW, PgVectoRSIVFFlat
 from ..backend.clients.pgvector.cli import PgVectorHNSW
@@ -60,6 +61,7 @@ cli.add_command(AWSOpenSearch)
 cli.add_command(OSSOpenSearch)
 cli.add_command(PgVectorScaleDiskAnn)
 cli.add_command(PgDiskAnn)
+cli.add_command(PgSearch)
 cli.add_command(AlloyDBScaNN)
 cli.add_command(OceanBaseHNSW)
 cli.add_command(OceanBaseIVF)
