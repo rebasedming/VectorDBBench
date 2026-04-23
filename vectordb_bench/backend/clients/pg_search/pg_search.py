@@ -16,11 +16,12 @@ from ..api import MetricType, VectorDB
 from .config import PgSearchConfigDict, PgSearchIndexConfig
 
 
-# pg_search metric strings consumed by `pdb.vector('metric=...')` typmod.
-_METRIC_TO_PDB: dict[MetricType, str] = {
-    MetricType.L2: "l2",
-    MetricType.COSINE: "cosine",
-    MetricType.IP: "ip",
+# pgvector opclass names carried on the indexed column. pg_search reads
+# pg_index.indclass at build time to set the tantivy VectorOptions metric.
+_METRIC_TO_OPCLASS: dict[MetricType, str] = {
+    MetricType.L2: "vector_l2_ops",
+    MetricType.COSINE: "vector_cosine_ops",
+    MetricType.IP: "vector_ip_ops",
 }
 
 # pgvector distance operators corresponding to each metric.
@@ -221,18 +222,18 @@ class PgSearch(VectorDB):
     def _embedding_index_expr(self) -> sql.Composable:
         """Indexed expression for the embedding column.
 
-        When the case's metric_type is set, wraps the column in a
-        `pdb.vector('metric=...')` cast so the underlying RaBitQ +
-        clustering index gets built for that metric instead of pg_search's
-        default L2.
+        The metric travels through the pgvector opclass attached to the
+        column in CREATE INDEX (`vector_l2_ops` / `vector_cosine_ops` /
+        `vector_ip_ops`). pg_search reads pg_index.indclass at build time
+        to set the tantivy VectorOptions metric. Falls back to the
+        default opclass (L2) when metric_type is unset.
         """
         metric = self.case_config.metric_type
-        if metric is None or metric not in _METRIC_TO_PDB:
+        if metric is None or metric not in _METRIC_TO_OPCLASS:
             return sql.Identifier(self._vector_field)
-        metric_str = _METRIC_TO_PDB[metric]
-        return sql.SQL("({col}::pdb.vector('metric={m}'))").format(
+        return sql.SQL("{col} {opclass}").format(
             col=sql.Identifier(self._vector_field),
-            m=sql.SQL(metric_str),
+            opclass=sql.SQL(_METRIC_TO_OPCLASS[metric]),
         )
 
     def _create_index(self):
@@ -242,16 +243,22 @@ class PgSearch(VectorDB):
         )
         emb_expr = self._embedding_index_expr()
         if self.with_scalar_labels:
+            # Cast the label column to pdb.literal so `label = 'x'`
+            # equality is pushed down to the BM25 index as a term match
+            # rather than rechecked on the heap.
+            lbl_expr = sql.SQL("({lbl}::pdb.literal)").format(
+                lbl=sql.Identifier(self._scalar_label_field),
+            )
             ddl = sql.SQL(
                 "CREATE INDEX IF NOT EXISTS {idx} ON public.{tbl} "
-                "USING bm25 ({pk}, {emb_expr}, {lbl}) "
+                "USING bm25 ({pk}, {emb_expr}, {lbl_expr}) "
                 "WITH (key_field='{pk_str}');",
             ).format(
                 idx=sql.Identifier(self._index_name),
                 tbl=sql.Identifier(self.table_name),
                 pk=sql.Identifier(self._primary_field),
                 emb_expr=emb_expr,
-                lbl=sql.Identifier(self._scalar_label_field),
+                lbl_expr=lbl_expr,
                 pk_str=sql.SQL(self._primary_field),
             )
         else:
