@@ -212,6 +212,7 @@ class BenchMarkRunner:
                 results=c_results,
             )
             test_result.display()
+            test_result.print_summary_table()
             test_result.flush()
 
             send_conn.send((SIGNAL.SUCCESS, None))

@@ -476,3 +476,114 @@ class TestResult(BaseModel):
         tmp_logger = logging.getLogger("no_color")
         for f in fmt:
             tmp_logger.info(f)
+
+    def print_summary_table(self, dbs: list[DB] | None = None) -> None:
+        """Print a compact run summary to stdout.
+
+        Columns: DB | db_label | case | recall | ndcg | p99 (ms) |
+        QPS@c=N... | load (s), followed by the non-default tuning knobs
+        from db_case_config (e.g. vector_cluster_probes=400,
+        vector_rerank_multiplier=5.0 for pg_search).
+
+        Written straight to stdout rather than through the logger so
+        it's easy to copy-paste out of a terminal without timestamp or
+        level prefixes. Complements `display()`, which remains for
+        backward compatibility.
+        """
+        filter_list = dbs if dbs and isinstance(dbs, list) else None
+        results = [
+            r
+            for r in self.results
+            if not filter_list or r.task_config.db not in filter_list
+        ]
+        if not results:
+            return
+
+        # Build concurrency-aware QPS columns. Most runs use the same
+        # `--num-concurrency` list for every case, so collect the union
+        # of values across results in sorted order.
+        conc_values = sorted(
+            {c for r in results for c in (r.metrics.conc_num_list or [])},
+        )
+        conc_headers = [f"qps@c={c}" for c in conc_values]
+
+        headers = [
+            "DB",
+            "db_label",
+            "case",
+            "recall",
+            "ndcg",
+            "p99(ms)",
+            *conc_headers,
+            "load(s)",
+        ]
+
+        # Fields that every DBCaseConfig has but aren't interesting to
+        # surface — skip them when printing the per-row config line.
+        boring_config_fields = {
+            "metric_type",
+            "create_index_before_load",
+            "create_index_after_load",
+        }
+
+        def fmt_case(name: str) -> str:
+            return name if len(name) <= 48 else name[:45] + "..."
+
+        rows: list[list[str]] = []
+        configs: list[str] = []
+        for r in results:
+            m = r.metrics
+            conc_by_n = dict(
+                zip(m.conc_num_list or [], m.conc_qps_list or [], strict=False),
+            )
+            p99_ms = m.serial_latency_p99 * 1000 if m.serial_latency_p99 else 0.0
+            row = [
+                r.task_config.db.name,
+                r.task_config.db_config.db_label or "",
+                fmt_case(r.task_config.case_config.case_name),
+                f"{m.recall:.4f}",
+                f"{m.ndcg:.4f}",
+                f"{p99_ms:.1f}",
+                *[
+                    f"{conc_by_n.get(c, 0):.1f}" if c in conc_by_n else "-"
+                    for c in conc_values
+                ],
+                f"{m.load_duration:.1f}",
+            ]
+            rows.append(row)
+
+            # Tuning knobs — pydantic model_dump minus the boring
+            # boilerplate. We show all remaining fields (not just the
+            # non-default ones) so the reader can see exactly what
+            # probes/rerank/ef values a run used without cross-checking
+            # defaults.
+            try:
+                raw = r.task_config.db_case_config.model_dump()
+                tuned = {
+                    k: v
+                    for k, v in raw.items()
+                    if k not in boring_config_fields and v is not None
+                }
+            except Exception:  # noqa: BLE001  # EmptyDBCaseConfig etc.
+                tuned = {}
+            configs.append(
+                ", ".join(f"{k}={v}" for k, v in tuned.items()) if tuned else "(none)",
+            )
+
+        widths = [
+            max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)
+        ]
+
+        def fmt_row(cells: list[str]) -> str:
+            return "  ".join(c.ljust(w) for c, w in zip(cells, widths, strict=True))
+
+        sep = "  ".join("-" * w for w in widths)
+
+        print()  # noqa: T201
+        print(f"Run summary (task_label={self.task_label}):")  # noqa: T201
+        print(fmt_row(headers))  # noqa: T201
+        print(sep)  # noqa: T201
+        for row, cfg in zip(rows, configs, strict=True):
+            print(fmt_row(row))  # noqa: T201
+            print(f"  config: {cfg}")  # noqa: T201
+        print()  # noqa: T201
