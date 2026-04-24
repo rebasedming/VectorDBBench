@@ -223,9 +223,17 @@ class PgVector(VectorDB):
 
         if len(session_options) > 0:
             for setting in session_options:
-                command = sql.SQL("SET {setting_name} " + "= {val};").format(
-                    setting_name=sql.Identifier(setting["parameter"]["setting_name"]),
-                    val=sql.Identifier(str(setting["parameter"]["val"])),
+                # GUC names are namespaced (e.g. `hnsw.iterative_scan`).
+                # sql.Identifier would double-quote the whole thing as one
+                # identifier, which Postgres parses differently from the
+                # namespaced GUC and leads to silently mis-applied or
+                # ignored SETs. Names come from code, not user input, so
+                # emitting them as raw SQL is safe; values are literals.
+                name = setting["parameter"]["setting_name"]
+                val = str(setting["parameter"]["val"])
+                command = sql.SQL("SET {name} = {val};").format(
+                    name=sql.SQL(name),
+                    val=sql.Literal(val),
                 )
                 log.debug(command.as_string(self.cursor))
                 self.cursor.execute(command)
