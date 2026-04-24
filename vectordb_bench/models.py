@@ -538,6 +538,11 @@ class TestResult(BaseModel):
                 zip(m.conc_num_list or [], m.conc_qps_list or [], strict=False),
             )
             p99_ms = m.serial_latency_p99 * 1000 if m.serial_latency_p99 else 0.0
+            # Distinguish "phase skipped" (--skip-load) from "phase
+            # actually took ~0s". The load phase is what runs the
+            # insert and the post-insert optimize, so if it isn't in
+            # the task's stage list we show "-" instead of 0.0.
+            load_ran = TaskStage.LOAD in r.task_config.stages
             row = [
                 r.task_config.db.name,
                 r.task_config.db_config.db_label or "",
@@ -549,8 +554,8 @@ class TestResult(BaseModel):
                     f"{conc_by_n.get(c, 0):.1f}" if c in conc_by_n else "-"
                     for c in conc_values
                 ],
-                f"{m.insert_duration:.1f}",
-                f"{m.optimize_duration:.1f}",
+                f"{m.insert_duration:.1f}" if load_ran else "-",
+                f"{m.optimize_duration:.1f}" if load_ran else "-",
             ]
             rows.append(row)
 
