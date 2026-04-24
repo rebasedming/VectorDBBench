@@ -515,7 +515,8 @@ class TestResult(BaseModel):
             "ndcg",
             "p99(ms)",
             *conc_headers,
-            "load(s)",
+            "insert(s)",
+            "build(s)",
         ]
 
         # Fields that every DBCaseConfig has but aren't interesting to
@@ -548,7 +549,8 @@ class TestResult(BaseModel):
                     f"{conc_by_n.get(c, 0):.1f}" if c in conc_by_n else "-"
                     for c in conc_values
                 ],
-                f"{m.load_duration:.1f}",
+                f"{m.insert_duration:.1f}",
+                f"{m.optimize_duration:.1f}",
             ]
             rows.append(row)
 
