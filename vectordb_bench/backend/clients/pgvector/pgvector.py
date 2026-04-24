@@ -236,7 +236,17 @@ class PgVector(VectorDB):
                     val=sql.Literal(val),
                 )
                 log.debug(command.as_string(self.cursor))
-                self.cursor.execute(command)
+                try:
+                    self.cursor.execute(command)
+                except Exception as e:
+                    # If a SET fails (e.g. ef_search > 1000 exceeds the
+                    # pgvector-imposed cap), the current transaction is
+                    # aborted and every later query would fail with
+                    # "current transaction is aborted". Roll back so the
+                    # caller sees the real error instead of the cascade.
+                    self.conn.rollback()
+                    msg = f"Failed to apply session setting {name}={val!r}: {e}"
+                    raise RuntimeError(msg) from e
             self.conn.commit()
 
         try:
@@ -538,10 +548,20 @@ class PgVector(VectorDB):
         index_param = self.case_config.index_param()
         search_param = self.case_config.search_param()
         q = np.asarray(query)
-        result = self.cursor.execute(
-            self._search,
-            (q, q, k) if index_param["quantization_type"] == "bit" and search_param["reranking"] else (q, k),
-            prepare=True,
-            binary=True,
-        )
-        return [int(i[0]) for i in result.fetchall()]
+        try:
+            result = self.cursor.execute(
+                self._search,
+                (q, q, k) if index_param["quantization_type"] == "bit" and search_param["reranking"] else (q, k),
+                prepare=True,
+                binary=True,
+            )
+            return [int(i[0]) for i in result.fetchall()]
+        except Exception:
+            # Roll back the aborted transaction so subsequent queries on
+            # this connection start fresh. Without this, one failed query
+            # poisons every later one with "current transaction is aborted".
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
