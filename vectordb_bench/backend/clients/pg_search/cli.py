@@ -42,6 +42,30 @@ class PgSearchTypedDict(CommonTypedDict):
         ),
     ]
     db_name: Annotated[str, click.option("--db-name", type=str, help="Db name", required=True)]
+    vector_cluster_probes: Annotated[
+        int,
+        click.option(
+            "--vector-cluster-probes",
+            type=int,
+            help="paradedb.vector_cluster_probes: per-segment cluster probe cap for "
+            "vector ORDER BY queries. Higher = better recall, linearly more work.",
+            default=50,
+            show_default=True,
+        ),
+    ]
+    vector_rerank_multiplier: Annotated[
+        float,
+        click.option(
+            "--vector-rerank-multiplier",
+            type=float,
+            help="paradedb.vector_rerank_multiplier: over-fetch factor for "
+            "exact-distance rerank. >1.0 engages a heap-side rerank pass that "
+            "reloads full-precision vectors for ceil(k * multiplier) candidates "
+            "and re-sorts by exact distance. 1.0 disables rerank.",
+            default=1.0,
+            show_default=True,
+        ),
+    ]
 
 
 @cli.command()
@@ -60,6 +84,9 @@ def PgSearch(**parameters: Unpack[PgSearchTypedDict]):
             port=parameters["port"],
             db_name=parameters["db_name"],
         ),
-        db_case_config=PgSearchIndexConfig(),
+        db_case_config=PgSearchIndexConfig(
+            vector_cluster_probes=parameters["vector_cluster_probes"],
+            vector_rerank_multiplier=parameters["vector_rerank_multiplier"],
+        ),
         **parameters,
     )

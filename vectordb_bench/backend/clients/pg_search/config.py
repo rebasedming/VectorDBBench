@@ -40,14 +40,20 @@ class PgSearchConfig(DBConfig):
 
 
 class PgSearchIndexConfig(BaseModel, DBCaseConfig):
-    """pg_search BM25 indexes have no per-query knobs at the SQL level —
-    `max_probe`, `distance_ratio`, etc. are tantivy-side defaults baked
-    into the build. So this is intentionally minimal.
-    """
-
     metric_type: MetricType | None = None
     create_index_before_load: bool = False
     create_index_after_load: bool = True
+
+    # Per-segment cluster probe count for vector ORDER BY. Higher =
+    # better recall, linearly more scoring work. Default in pg_search
+    # is 50.
+    vector_cluster_probes: int = 50
+
+    # Over-fetch factor for exact-distance rerank. >1.0 engages a
+    # heap-side rerank pass that reloads full-precision vectors for
+    # `ceil(k * multiplier)` approximate candidates and re-sorts by
+    # exact distance. 1.0 (default) disables rerank.
+    vector_rerank_multiplier: float = 1.0
 
     def index_param(self) -> dict[str, Any]:
         return {}
@@ -62,6 +68,18 @@ class PgSearchIndexConfig(BaseModel, DBCaseConfig):
                     "parameter": {
                         "setting_name": "max_parallel_workers_per_gather",
                         "val": "0",
+                    },
+                },
+                {
+                    "parameter": {
+                        "setting_name": "paradedb.vector_cluster_probes",
+                        "val": str(self.vector_cluster_probes),
+                    },
+                },
+                {
+                    "parameter": {
+                        "setting_name": "paradedb.vector_rerank_multiplier",
+                        "val": str(self.vector_rerank_multiplier),
                     },
                 },
             ],

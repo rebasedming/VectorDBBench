@@ -156,10 +156,15 @@ class PgSearch(VectorDB):
             "session_options"
         ]
         for setting in session_options:
+            # GUC names may be schema-qualified (e.g. `paradedb.vector_cluster_probes`).
+            # sql.Identifier would double-quote the whole thing and change lookup
+            # semantics, so emit them as raw SQL. Names come from code, not user input.
+            name = setting["parameter"]["setting_name"]
+            val = str(setting["parameter"]["val"])
             self.cursor.execute(
-                sql.SQL("SET {setting_name} = {val};").format(
-                    setting_name=sql.Identifier(setting["parameter"]["setting_name"]),
-                    val=sql.Identifier(str(setting["parameter"]["val"])),
+                sql.SQL("SET {name} = {val};").format(
+                    name=sql.SQL(name),
+                    val=sql.Literal(val),
                 ),
             )
         self.conn.commit()
@@ -353,10 +358,20 @@ class PgSearch(VectorDB):
         assert self.cursor is not None
 
         q = np.asarray(query)
-        result = self.cursor.execute(
-            self._search,
-            (q, k),
-            prepare=True,
-            binary=True,
-        )
-        return [int(row[0]) for row in result.fetchall()]
+        try:
+            result = self.cursor.execute(
+                self._search,
+                (q, k),
+                prepare=True,
+                binary=True,
+            )
+            return [int(row[0]) for row in result.fetchall()]
+        except Exception:
+            # Roll back the aborted transaction so subsequent queries on
+            # this connection start fresh. Without this, one failed query
+            # poisons every later one with "current transaction is aborted".
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
