@@ -23,7 +23,7 @@ from ..backend.clients.oss_opensearch.cli import OSSOpenSearch
 from ..backend.clients.pg_search.cli import PgSearch
 from ..backend.clients.pgdiskann.cli import PgDiskAnn
 from ..backend.clients.pgvecto_rs.cli import PgVectoRSHNSW, PgVectoRSIVFFlat
-from ..backend.clients.pgvector.cli import PgVectorHNSW
+from ..backend.clients.pgvector.cli import PgVectorHNSW, PgVectorIVFFlat
 from ..backend.clients.pgvectorscale.cli import PgVectorScaleDiskAnn
 from ..backend.clients.pinecone.cli import Pinecone
 from ..backend.clients.pinot.cli import Pinot
@@ -49,6 +49,7 @@ from .batch_cli import BatchCli
 from .cli import cli
 
 cli.add_command(PgVectorHNSW)
+cli.add_command(PgVectorIVFFlat)
 cli.add_command(PgVectoRSHNSW)
 cli.add_command(PgVectoRSIVFFlat)
 cli.add_command(Redis)
