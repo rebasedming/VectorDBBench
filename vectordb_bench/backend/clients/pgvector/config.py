@@ -67,6 +67,13 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
     # Options: "strict_order" (order by distance), "relaxed_order" (slightly out of order but better recall)
     # See: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
     iterative_scan: str = "relaxed_order"
+    # Hard cap on tuples visited during iterative scans (pgvector default: 20000).
+    # For highly selective filters the default truncates recall — bumping this lets
+    # iterative_scan keep expanding until enough filter-matching candidates are found.
+    max_scan_tuples: int | None = None
+    # Multiplier for work_mem during iterative scans (pgvector default: 1).
+    # Higher = larger candidate pool retained per pass.
+    scan_mem_multiplier: int | None = None
 
     def parse_metric(self) -> str:
         d = {
@@ -213,7 +220,12 @@ class PgVectorIVFFlatConfig(PgVectorIndexConfig):
         }
 
     def session_param(self) -> PgVectorSessionCommands:
-        session_parameters = {"ivfflat.probes": self.probes, "ivfflat.iterative_scan": self.iterative_scan}
+        session_parameters = {
+            "ivfflat.probes": self.probes,
+            "ivfflat.iterative_scan": self.iterative_scan,
+            "ivfflat.max_scan_tuples": self.max_scan_tuples,
+            "ivfflat.scan_mem_multiplier": self.scan_mem_multiplier,
+        }
         return {"session_options": self._optionally_build_set_options(session_parameters)}
 
 
@@ -263,7 +275,12 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
         }
 
     def session_param(self) -> PgVectorSessionCommands:
-        session_parameters = {"hnsw.ef_search": self.ef_search, "hnsw.iterative_scan": self.iterative_scan}
+        session_parameters = {
+            "hnsw.ef_search": self.ef_search,
+            "hnsw.iterative_scan": self.iterative_scan,
+            "hnsw.max_scan_tuples": self.max_scan_tuples,
+            "hnsw.scan_mem_multiplier": self.scan_mem_multiplier,
+        }
         return {"session_options": self._optionally_build_set_options(session_parameters)}
 
 

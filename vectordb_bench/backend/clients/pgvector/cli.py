@@ -127,6 +127,38 @@ class PgVectorTypedDict(CommonTypedDict):
             callback=set_default_quantized_fetch_limit,
         ),
     ]
+    iterative_scan: Annotated[
+        str | None,
+        click.option(
+            "--iterative-scan",
+            type=click.Choice(["off", "strict_order", "relaxed_order"]),
+            help="pgvector iterative_scan mode for filtered queries. "
+            "strict_order = re-sort by exact distance (best recall, slower). "
+            "relaxed_order = approximate ordering, faster (default).",
+            required=False,
+        ),
+    ]
+    max_scan_tuples: Annotated[
+        int | None,
+        click.option(
+            "--max-scan-tuples",
+            type=int,
+            help="pgvector hnsw.max_scan_tuples / ivfflat.max_scan_tuples — hard cap on "
+            "tuples visited during iterative scans (default 20000). Bump this for "
+            "highly selective filters to let iterative_scan find enough matching candidates.",
+            required=False,
+        ),
+    ]
+    scan_mem_multiplier: Annotated[
+        int | None,
+        click.option(
+            "--scan-mem-multiplier",
+            type=int,
+            help="pgvector hnsw.scan_mem_multiplier / ivfflat.scan_mem_multiplier — multiplier "
+            "for work_mem during iterative scans (default 1).",
+            required=False,
+        ),
+    ]
 
 
 class PgVectorIVFFlatTypedDict(PgVectorTypedDict, IVFFlatTypedDict): ...
@@ -161,6 +193,11 @@ def PgVectorIVFFlat(
             reranking=parameters["reranking"],
             reranking_metric=parameters["reranking_metric"],
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
+            **{
+                k: parameters[k]
+                for k in ("iterative_scan", "max_scan_tuples", "scan_mem_multiplier")
+                if parameters.get(k) is not None
+            },
         ),
         **parameters,
     )
@@ -198,6 +235,11 @@ def PgVectorHNSW(
             reranking=parameters["reranking"],
             reranking_metric=parameters["reranking_metric"],
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
+            **{
+                k: parameters[k]
+                for k in ("iterative_scan", "max_scan_tuples", "scan_mem_multiplier")
+                if parameters.get(k) is not None
+            },
         ),
         **parameters,
     )
