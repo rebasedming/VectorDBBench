@@ -514,6 +514,7 @@ class TestResult(BaseModel):
             "recall",
             "ndcg",
             "p99(ms)",
+            "qps(serial)",
             *conc_headers,
             "insert(s)",
             "build(s)",
@@ -543,6 +544,11 @@ class TestResult(BaseModel):
             # insert and the post-insert optimize, so if it isn't in
             # the task's stage list we show "-" instead of 0.0.
             load_ran = TaskStage.LOAD in r.task_config.stages
+            serial_qps = (
+                1.0 / m.serial_latency_avg
+                if m.serial_latency_avg and m.serial_latency_avg > 0
+                else None
+            )
             row = [
                 r.task_config.db.name,
                 r.task_config.db_config.db_label or "",
@@ -550,6 +556,7 @@ class TestResult(BaseModel):
                 f"{m.recall:.4f}",
                 f"{m.ndcg:.4f}",
                 f"{p99_ms:.1f}",
+                f"{serial_qps:.1f}" if serial_qps is not None else "-",
                 *[
                     f"{conc_by_n.get(c, 0):.1f}" if c in conc_by_n else "-"
                     for c in conc_values

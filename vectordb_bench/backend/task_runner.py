@@ -222,7 +222,13 @@ class CaseRunner(BaseModel):
                     ) = search_results
                 if TaskStage.SEARCH_SERIAL in self.config.stages:
                     search_results = self._serial_search()
-                    m.recall, m.ndcg, m.serial_latency_p99, m.serial_latency_p95 = search_results
+                    (
+                        m.recall,
+                        m.ndcg,
+                        m.serial_latency_p99,
+                        m.serial_latency_p95,
+                        m.serial_latency_avg,
+                    ) = search_results
 
         except Exception as e:
             log.warning(f"Failed to run performance case, reason = {e}")
