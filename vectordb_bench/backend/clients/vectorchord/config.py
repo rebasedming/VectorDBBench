@@ -103,6 +103,11 @@ class VectorChordRQConfig(VectorChordIndexConfig):
     probes: int | None = 10
     epsilon: float | None = 1.9  # range [0.0, 4.0]
     max_scan_tuples: int | None = None  # default -1, range [-1, 2147483647]
+    # When true, applies the WHERE filter before the vector probe so the
+    # search only ranks rows that already match the predicate. For
+    # selective filters this dramatically lowers latency (no wasted
+    # probing of non-matching rows) at the same recall.
+    prefilter: bool | None = None
 
     def index_param(self) -> dict:
         options_parts = []
@@ -141,6 +146,8 @@ class VectorChordRQConfig(VectorChordIndexConfig):
             params["vchordrq.epsilon"] = str(self.epsilon)
         if self.max_scan_tuples is not None:
             params["vchordrq.max_scan_tuples"] = str(self.max_scan_tuples)
+        if self.prefilter is not None:
+            params["vchordrq.prefilter"] = "on" if self.prefilter else "off"
         return params
 
 

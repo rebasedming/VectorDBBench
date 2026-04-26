@@ -147,6 +147,17 @@ class VectorChordRQTypedDict(VectorChordTypedDict):
             help="Max tuples to scan before stopping (-1 for unlimited)",
         ),
     ]
+    prefilter: Annotated[
+        bool | None,
+        click.option(
+            "--prefilter/--no-prefilter",
+            type=bool,
+            default=None,
+            help="vchordrq.prefilter: apply WHERE filter before the vector probe. "
+            "For selective filters this dramatically lowers latency at the same recall "
+            "(omit to leave the server default).",
+        ),
+    ]
 
 
 @cli.command()
@@ -178,6 +189,7 @@ def VectorChordRQ(
             degree_of_parallelism=parameters["degree_of_parallelism"],
             max_scan_tuples=parameters["max_scan_tuples"],
             max_parallel_workers=parameters["max_parallel_workers"],
+            prefilter=parameters["prefilter"],
         ),
         **parameters,
     )
