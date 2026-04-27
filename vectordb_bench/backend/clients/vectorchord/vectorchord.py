@@ -24,6 +24,7 @@ class VectorChord(VectorDB):
     supported_filter_types: list[FilterOp] = [
         FilterOp.NonFilter,
         FilterOp.NumGE,
+        FilterOp.StrEqual,
     ]
 
     conn: psycopg.Connection[Any] | None = None
@@ -39,6 +40,7 @@ class VectorChord(VectorDB):
         db_case_config: VectorChordIndexConfig,
         collection_name: str = "vectorchord_collection",
         drop_old: bool = False,
+        with_scalar_labels: bool = False,
         **kwargs,
     ):
         self.name = "VectorChord"
@@ -46,10 +48,12 @@ class VectorChord(VectorDB):
         self.case_config = db_case_config
         self.table_name = collection_name
         self.dim = dim
+        self.with_scalar_labels = with_scalar_labels
 
         self._index_name = "vectorchord_index"
         self._primary_field = "id"
         self._vector_field = "embedding"
+        self._scalar_label_field = "label"
 
         index_param = self.case_config.index_param()
         self._quantization_type = index_param["quantization_type"]
@@ -224,23 +228,51 @@ class VectorChord(VectorDB):
         assert self.cursor is not None, "Cursor is not initialized"
 
         try:
-            log.info(f"{self.name} client create table : {self.table_name}")
+            log.info(
+                f"{self.name} client create table : {self.table_name} "
+                f"(with_labels={self.with_scalar_labels})"
+            )
 
             col_type = self._quantization_type
             if col_type in ("rabitq8", "rabitq4"):
                 # rabitq types need vector column + quantization during insert
                 col_type = "vector"
 
-            self.cursor.execute(
-                sql.SQL(
-                    "CREATE TABLE IF NOT EXISTS public.{table_name} "
-                    "(id BIGINT PRIMARY KEY, embedding {col_type}({dim}));",
-                ).format(
-                    table_name=sql.Identifier(self.table_name),
-                    col_type=sql.SQL(col_type),
-                    dim=dim,
-                ),
-            )
+            if self.with_scalar_labels:
+                self.cursor.execute(
+                    sql.SQL(
+                        "CREATE TABLE IF NOT EXISTS public.{table_name} "
+                        "(id BIGINT PRIMARY KEY, embedding {col_type}({dim}), "
+                        "{lbl} VARCHAR(64));",
+                    ).format(
+                        table_name=sql.Identifier(self.table_name),
+                        col_type=sql.SQL(col_type),
+                        dim=dim,
+                        lbl=sql.Identifier(self._scalar_label_field),
+                    ),
+                )
+                # Btree on label so equality filters can be pushed down
+                # alongside the vector ORDER BY scan.
+                self.cursor.execute(
+                    sql.SQL(
+                        "CREATE INDEX IF NOT EXISTS {idx_name} ON public.{table_name} ({lbl});",
+                    ).format(
+                        idx_name=sql.Identifier(f"{self.table_name}_label_idx"),
+                        table_name=sql.Identifier(self.table_name),
+                        lbl=sql.Identifier(self._scalar_label_field),
+                    ),
+                )
+            else:
+                self.cursor.execute(
+                    sql.SQL(
+                        "CREATE TABLE IF NOT EXISTS public.{table_name} "
+                        "(id BIGINT PRIMARY KEY, embedding {col_type}({dim}));",
+                    ).format(
+                        table_name=sql.Identifier(self.table_name),
+                        col_type=sql.SQL(col_type),
+                        dim=dim,
+                    ),
+                )
             self.conn.commit()
         except Exception as e:
             log.warning(f"Failed to create vectorchord table: {self.table_name} error: {e}")
@@ -250,6 +282,7 @@ class VectorChord(VectorDB):
         self,
         embeddings: list[list[float]],
         metadata: list[int],
+        labels_data: list[str] | None = None,
         **kwargs: Any,
     ) -> tuple[int, Exception | None]:
         assert self.conn is not None, "Connection is not initialized"
@@ -259,25 +292,38 @@ class VectorChord(VectorDB):
             metadata_arr = np.array(metadata)
             embeddings_arr = np.array(embeddings)
 
-            if self._quantization_type == "halfvec":
-                with self.cursor.copy(
-                    sql.SQL("COPY public.{table_name} FROM STDIN (FORMAT BINARY)").format(
-                        table_name=sql.Identifier(self.table_name),
-                    ),
-                ) as copy:
-                    copy.set_types(["bigint", "halfvec"])
+            emb_type = "halfvec" if self._quantization_type == "halfvec" else "vector"
+            if self.with_scalar_labels:
+                copy_sql = sql.SQL(
+                    "COPY public.{table_name} ({pk}, {emb}, {lbl}) FROM STDIN (FORMAT BINARY)"
+                ).format(
+                    table_name=sql.Identifier(self.table_name),
+                    pk=sql.Identifier(self._primary_field),
+                    emb=sql.Identifier(self._vector_field),
+                    lbl=sql.Identifier(self._scalar_label_field),
+                )
+                with self.cursor.copy(copy_sql) as copy:
+                    copy.set_types(["bigint", emb_type, "varchar"])
                     for i, row in enumerate(metadata_arr):
-                        copy.write_row((row, np.float16(embeddings_arr[i])))
+                        emb = (
+                            np.float16(embeddings_arr[i])
+                            if emb_type == "halfvec"
+                            else embeddings_arr[i]
+                        )
+                        copy.write_row((row, emb, labels_data[i]))
             else:
-                # vector, rabitq8, rabitq4 all store as vector column
-                with self.cursor.copy(
-                    sql.SQL("COPY public.{table_name} FROM STDIN (FORMAT BINARY)").format(
-                        table_name=sql.Identifier(self.table_name),
-                    ),
-                ) as copy:
-                    copy.set_types(["bigint", "vector"])
+                copy_sql = sql.SQL(
+                    "COPY public.{table_name} FROM STDIN (FORMAT BINARY)"
+                ).format(table_name=sql.Identifier(self.table_name))
+                with self.cursor.copy(copy_sql) as copy:
+                    copy.set_types(["bigint", emb_type])
                     for i, row in enumerate(metadata_arr):
-                        copy.write_row((row, embeddings_arr[i]))
+                        emb = (
+                            np.float16(embeddings_arr[i])
+                            if emb_type == "halfvec"
+                            else embeddings_arr[i]
+                        )
+                        copy.write_row((row, emb))
             self.conn.commit()
 
             return len(metadata), None
@@ -304,6 +350,10 @@ class VectorChord(VectorDB):
             self.where_clause = ""
         elif filters.type == FilterOp.NumGE:
             self.where_clause = f"WHERE {self._primary_field} >= {filters.int_value}"
+        elif filters.type == FilterOp.StrEqual:
+            self.where_clause = (
+                f"WHERE {self._scalar_label_field} = '{filters.label_value}'"
+            )
         else:
             msg = f"Not support Filter for VectorChord - {filters}"
             raise ValueError(msg)

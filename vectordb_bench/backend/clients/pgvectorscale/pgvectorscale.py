@@ -10,6 +10,7 @@ import psycopg
 from pgvector.psycopg import register_vector
 from psycopg import Connection, Cursor, sql
 
+from ...filter import Filter, FilterOp
 from ..api import VectorDB
 from .config import PgVectorScaleConfigDict, PgVectorScaleIndexConfig
 
@@ -19,11 +20,17 @@ log = logging.getLogger(__name__)
 class PgVectorScale(VectorDB):
     """Use psycopg instructions"""
 
-    conn: psycopg.Connection[Any] | None = None
-    coursor: psycopg.Cursor[Any] | None = None
+    supported_filter_types: list[FilterOp] = [
+        FilterOp.NonFilter,
+        FilterOp.NumGE,
+        FilterOp.StrEqual,
+    ]
 
-    _unfiltered_search: sql.Composed
-    _filtered_search: sql.Composed
+    conn: psycopg.Connection[Any] | None = None
+    cursor: psycopg.Cursor[Any] | None = None
+
+    _search: sql.Composed
+    where_clause: str = ""
 
     def __init__(
         self,
@@ -32,6 +39,7 @@ class PgVectorScale(VectorDB):
         db_case_config: PgVectorScaleIndexConfig,
         collection_name: str = "pg_vectorscale_collection",
         drop_old: bool = False,
+        with_scalar_labels: bool = False,
         **kwargs,
     ):
         self.name = "PgVectorScale"
@@ -39,10 +47,12 @@ class PgVectorScale(VectorDB):
         self.case_config = db_case_config
         self.table_name = collection_name
         self.dim = dim
+        self.with_scalar_labels = with_scalar_labels
 
         self._index_name = "pgvectorscale_index"
         self._primary_field = "id"
         self._vector_field = "embedding"
+        self._scalar_label_field = "label"
 
         self.conn, self.cursor = self._create_connection(**self.db_config)
 
@@ -102,26 +112,6 @@ class PgVectorScale(VectorDB):
                 log.debug(command.as_string(self.cursor))
                 self.cursor.execute(command)
             self.conn.commit()
-
-        self._filtered_search = sql.Composed(
-            [
-                sql.SQL("SELECT id FROM public.{} WHERE id >= %s ORDER BY embedding ").format(
-                    sql.Identifier(self.table_name),
-                ),
-                sql.SQL(self.case_config.search_param()["metric_fun_op"]),
-                sql.SQL(" %s::vector LIMIT %s::int"),
-            ],
-        )
-
-        self._unfiltered_search = sql.Composed(
-            [
-                sql.SQL("SELECT id FROM public.{} ORDER BY embedding ").format(
-                    sql.Identifier(self.table_name),
-                ),
-                sql.SQL(self.case_config.search_param()["metric_fun_op"]),
-                sql.SQL(" %s::vector LIMIT %s::int"),
-            ],
-        )
 
         try:
             yield
@@ -212,13 +202,40 @@ class PgVectorScale(VectorDB):
         assert self.cursor is not None, "Cursor is not initialized"
 
         try:
-            log.info(f"{self.name} client create table : {self.table_name}")
-
-            self.cursor.execute(
-                sql.SQL(
-                    "CREATE TABLE IF NOT EXISTS public.{table_name} (id BIGINT PRIMARY KEY, embedding vector({dim}));",
-                ).format(table_name=sql.Identifier(self.table_name), dim=dim),
+            log.info(
+                f"{self.name} client create table : {self.table_name} "
+                f"(with_labels={self.with_scalar_labels})"
             )
+
+            if self.with_scalar_labels:
+                self.cursor.execute(
+                    sql.SQL(
+                        "CREATE TABLE IF NOT EXISTS public.{table_name} "
+                        "(id BIGINT PRIMARY KEY, embedding vector({dim}), "
+                        "{lbl} VARCHAR(64));",
+                    ).format(
+                        table_name=sql.Identifier(self.table_name),
+                        dim=dim,
+                        lbl=sql.Identifier(self._scalar_label_field),
+                    ),
+                )
+                # Btree on label so equality filters can be pushed down
+                # alongside the DiskANN ORDER BY scan.
+                self.cursor.execute(
+                    sql.SQL(
+                        "CREATE INDEX IF NOT EXISTS {idx_name} ON public.{table_name} ({lbl});",
+                    ).format(
+                        idx_name=sql.Identifier(f"{self.table_name}_label_idx"),
+                        table_name=sql.Identifier(self.table_name),
+                        lbl=sql.Identifier(self._scalar_label_field),
+                    ),
+                )
+            else:
+                self.cursor.execute(
+                    sql.SQL(
+                        "CREATE TABLE IF NOT EXISTS public.{table_name} (id BIGINT PRIMARY KEY, embedding vector({dim}));",
+                    ).format(table_name=sql.Identifier(self.table_name), dim=dim),
+                )
             self.conn.commit()
         except Exception as e:
             log.warning(f"Failed to create pgvectorscale table: {self.table_name} error: {e}")
@@ -228,6 +245,7 @@ class PgVectorScale(VectorDB):
         self,
         embeddings: list[list[float]],
         metadata: list[int],
+        labels_data: list[str] | None = None,
         **kwargs: Any,
     ) -> tuple[int, Exception | None]:
         assert self.conn is not None, "Connection is not initialized"
@@ -237,14 +255,28 @@ class PgVectorScale(VectorDB):
             metadata_arr = np.array(metadata)
             embeddings_arr = np.array(embeddings)
 
-            with self.cursor.copy(
-                sql.SQL("COPY public.{table_name} FROM STDIN (FORMAT BINARY)").format(
+            if self.with_scalar_labels:
+                copy_sql = sql.SQL(
+                    "COPY public.{table_name} ({pk}, {emb}, {lbl}) FROM STDIN (FORMAT BINARY)"
+                ).format(
                     table_name=sql.Identifier(self.table_name),
-                ),
-            ) as copy:
-                copy.set_types(["bigint", "vector"])
-                for i, row in enumerate(metadata_arr):
-                    copy.write_row((row, embeddings_arr[i]))
+                    pk=sql.Identifier(self._primary_field),
+                    emb=sql.Identifier(self._vector_field),
+                    lbl=sql.Identifier(self._scalar_label_field),
+                )
+                with self.cursor.copy(copy_sql) as copy:
+                    copy.set_types(["bigint", "vector", "varchar"])
+                    for i, row in enumerate(metadata_arr):
+                        copy.write_row((row, embeddings_arr[i], labels_data[i]))
+            else:
+                with self.cursor.copy(
+                    sql.SQL("COPY public.{table_name} FROM STDIN (FORMAT BINARY)").format(
+                        table_name=sql.Identifier(self.table_name),
+                    ),
+                ) as copy:
+                    copy.set_types(["bigint", "vector"])
+                    for i, row in enumerate(metadata_arr):
+                        copy.write_row((row, embeddings_arr[i]))
             self.conn.commit()
 
             if kwargs.get("last_batch"):
@@ -255,26 +287,43 @@ class PgVectorScale(VectorDB):
             log.warning(f"Failed to insert data into pgvector table ({self.table_name}), error: {e}")
             return 0, e
 
+    def _generate_search_query(self) -> sql.Composed:
+        return sql.Composed(
+            [
+                sql.SQL("SELECT id FROM public.{table_name} {where_clause} ORDER BY embedding ").format(
+                    table_name=sql.Identifier(self.table_name),
+                    where_clause=sql.SQL(self.where_clause),
+                ),
+                sql.SQL(self.case_config.search_param()["metric_fun_op"]),
+                sql.SQL(" %s::vector LIMIT %s::int"),
+            ],
+        )
+
+    def prepare_filter(self, filters: Filter):
+        if filters.type == FilterOp.NonFilter:
+            self.where_clause = ""
+        elif filters.type == FilterOp.NumGE:
+            self.where_clause = f"WHERE {self._primary_field} >= {filters.int_value}"
+        elif filters.type == FilterOp.StrEqual:
+            self.where_clause = (
+                f"WHERE {self._scalar_label_field} = '{filters.label_value}'"
+            )
+        else:
+            msg = f"Not support Filter for PgVectorScale - {filters}"
+            raise ValueError(msg)
+
+        self._search = self._generate_search_query()
+
     def search_embedding(
         self,
         query: list[float],
         k: int = 100,
-        filters: dict | None = None,
         timeout: int | None = None,
+        **kwargs: Any,
     ) -> list[int]:
         assert self.conn is not None, "Connection is not initialized"
         assert self.cursor is not None, "Cursor is not initialized"
 
         q = np.asarray(query)
-        if filters:
-            gt = filters.get("id")
-            result = self.cursor.execute(
-                self._filtered_search,
-                (gt, q, k),
-                prepare=True,
-                binary=True,
-            )
-        else:
-            result = self.cursor.execute(self._unfiltered_search, (q, k), prepare=True, binary=True)
-
+        result = self.cursor.execute(self._search, (q, k), prepare=True, binary=True)
         return [int(i[0]) for i in result.fetchall()]
