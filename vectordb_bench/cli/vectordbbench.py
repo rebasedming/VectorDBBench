@@ -23,6 +23,8 @@ from ..backend.clients.oss_opensearch.cli import OSSOpenSearch
 from ..backend.clients.pg_search.cli import PgSearch
 from ..backend.clients.pgdiskann.cli import PgDiskAnn
 from ..backend.clients.pgvecto_rs.cli import PgVectoRSHNSW, PgVectoRSIVFFlat
+from ..backend.clients.pdxearch.cli import PDXearch as PDXearchCli
+from ..backend.clients.tantivy_turboquant.cli import TantivyTurboquant as TantivyTurboquantCli
 from ..backend.clients.pgvector.cli import PgVectorHNSW, PgVectorIVFFlat
 from ..backend.clients.pgvectorscale.cli import PgVectorScaleDiskAnn
 from ..backend.clients.pinecone.cli import Pinecone
@@ -98,6 +100,8 @@ cli.add_command(Pinot)
 cli.add_command(PolarDBHNSWFlat)
 cli.add_command(PolarDBHNSWPQ)
 cli.add_command(PolarDBHNSWSQ)
+cli.add_command(PDXearchCli)
+cli.add_command(TantivyTurboquantCli)
 
 
 if __name__ == "__main__":

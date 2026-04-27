@@ -63,6 +63,8 @@ class DB(Enum):
     VectorChord = "VectorChord"
     PolarDB = "PolarDB"
     Pinot = "Pinot"
+    PDXearch = "PDXearch"
+    TantivyTurboquant = "TantivyTurboquant"
 
     @property
     def init_cls(self) -> type[VectorDB]:  # noqa: PLR0911, PLR0912, C901, PLR0915
@@ -268,6 +270,16 @@ class DB(Enum):
             from .pinot.pinot import Pinot
 
             return Pinot
+
+        if self == DB.PDXearch:
+            from .pdxearch.pdxearch import PDXearch
+
+            return PDXearch
+
+        if self == DB.TantivyTurboquant:
+            from .tantivy_turboquant.tantivy_turboquant import TantivyTurboquant
+
+            return TantivyTurboquant
 
         msg = f"Unknown DB: {self.name}"
         raise ValueError(msg)
@@ -477,6 +489,16 @@ class DB(Enum):
 
             return PinotConfig
 
+        if self == DB.PDXearch:
+            from .pdxearch.config import PDXearchConfig
+
+            return PDXearchConfig
+
+        if self == DB.TantivyTurboquant:
+            from .tantivy_turboquant.config import TantivyTurboquantConfig
+
+            return TantivyTurboquantConfig
+
         msg = f"Unknown DB: {self.name}"
         raise ValueError(msg)
 
@@ -666,6 +688,16 @@ class DB(Enum):
                 IndexType.IVFFlat: PinotIVFFlatConfig,
                 IndexType.IVFPQ: PinotIVFPQConfig,
             }.get(index_type, PinotHNSWConfig)
+
+        if self == DB.PDXearch:
+            from .pdxearch.config import PDXearchIndexConfig
+
+            return PDXearchIndexConfig
+
+        if self == DB.TantivyTurboquant:
+            from .tantivy_turboquant.config import TantivyTurboquantIndexConfig
+
+            return TantivyTurboquantIndexConfig
 
         # DB.Pinecone, DB.Redis
         return EmptyDBCaseConfig
