@@ -55,6 +55,12 @@ class PgSearchIndexConfig(BaseModel, DBCaseConfig):
     # exact distance. 1.0 (default) disables rerank.
     vector_rerank_multiplier: float = 1.0
 
+    # TurboQuant total bits per coordinate for the IVF/cluster path.
+    # Allowed: 4 (3-bit codebook + 1-bit sign, default) or 5 (4-bit
+    # codebook + 1-bit sign — same SIMD kernel cost, doubles the
+    # stage-1 codebook size, reduces quantization mis-ranking).
+    vector_bit_width: int = 4
+
     def index_param(self) -> dict[str, Any]:
         return {}
 

@@ -66,6 +66,18 @@ class PgSearchTypedDict(CommonTypedDict):
             show_default=True,
         ),
     ]
+    vector_bit_width: Annotated[
+        int,
+        click.option(
+            "--vector-bit-width",
+            type=click.IntRange(4, 5),
+            help="TurboQuant total bits per coordinate for the IVF/cluster path. "
+            "4 (default) uses a 3-bit codebook + 1-bit sign; 5 uses a 4-bit "
+            "codebook + 1-bit sign (~2x more codebook entries, same SIMD cost).",
+            default=4,
+            show_default=True,
+        ),
+    ]
 
 
 @cli.command()
@@ -87,6 +99,7 @@ def PgSearch(**parameters: Unpack[PgSearchTypedDict]):
         db_case_config=PgSearchIndexConfig(
             vector_cluster_probes=parameters["vector_cluster_probes"],
             vector_rerank_multiplier=parameters["vector_rerank_multiplier"],
+            vector_bit_width=parameters["vector_bit_width"],
         ),
         **parameters,
     )

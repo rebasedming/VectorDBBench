@@ -244,9 +244,14 @@ class PgSearch(VectorDB):
     def _create_index(self):
         log.info(
             f"{self.name} create BM25 index {self._index_name} "
-            f"(metric={self.case_config.metric_type})"
+            f"(metric={self.case_config.metric_type}, "
+            f"bit_width={self.case_config.vector_bit_width})"
         )
         emb_expr = self._embedding_index_expr()
+        index_options = (
+            f"key_field='{{pk_str}}', "
+            f"vector_bit_width={self.case_config.vector_bit_width}"
+        )
         if self.with_scalar_labels:
             # Cast the label column to pdb.literal so `label = 'x'`
             # equality is pushed down to the BM25 index as a term match
@@ -257,7 +262,7 @@ class PgSearch(VectorDB):
             ddl = sql.SQL(
                 "CREATE INDEX IF NOT EXISTS {idx} ON public.{tbl} "
                 "USING bm25 ({pk}, {emb_expr}, {lbl_expr}) "
-                "WITH (key_field='{pk_str}');",
+                "WITH (" + index_options + ");",
             ).format(
                 idx=sql.Identifier(self._index_name),
                 tbl=sql.Identifier(self.table_name),
@@ -270,7 +275,7 @@ class PgSearch(VectorDB):
             ddl = sql.SQL(
                 "CREATE INDEX IF NOT EXISTS {idx} ON public.{tbl} "
                 "USING bm25 ({pk}, {emb_expr}) "
-                "WITH (key_field='{pk_str}');",
+                "WITH (" + index_options + ");",
             ).format(
                 idx=sql.Identifier(self._index_name),
                 tbl=sql.Identifier(self.table_name),
