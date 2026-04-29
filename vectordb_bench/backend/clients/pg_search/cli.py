@@ -72,9 +72,10 @@ class PgSearchTypedDict(CommonTypedDict):
             "--vector-bit-width",
             type=click.IntRange(4, 5),
             help="TurboQuant total bits per coordinate for the IVF/cluster path. "
-            "4 (default) uses a 3-bit codebook + 1-bit sign; 5 uses a 4-bit "
-            "codebook + 1-bit sign (~2x more codebook entries, same SIMD cost).",
-            default=4,
+            "5 (default) uses a 4-bit codebook + 1-bit sign; 4 uses a 3-bit "
+            "codebook + 1-bit sign. Same SIMD cost; 5 measured ~+8.5 pp recall "
+            "on Cohere/COSINE 768d.",
+            default=5,
             show_default=True,
         ),
     ]
