@@ -6,11 +6,32 @@ Per-case `rebuild` flag controls whether DROP_OLD+LOAD prepends the
 search stage:
   - True  -> drop, reload, build the index, then search
   - False -> reuse whatever is already in Postgres, just search
-Set rebuild=True for the first case (so the table exists), and for any
-later case where a BUILD-TIME option changes (vector_bit_width is the
-only one of those today). Query-time knobs (vector_cluster_probes,
-vector_rerank_multiplier) don't need a rebuild -- flip them per case
-freely.
+Set rebuild=True on whichever case will actually run first (see note
+below) and for any later case where a BUILD-TIME option changes
+(vector_bit_width is the only one of those today). Query-time knobs
+(vector_cluster_probes, vector_rerank_multiplier) don't need a
+rebuild -- flip them per case freely.
+
+** Important: the Assembler reorders tasks. **
+
+vectordb_bench's `Assembler.assemble_all` sorts within a db by
+`(dataset_size, 0 if FilterOp.StrEqual else 1)` -- so any
+label_percentage cases jump to the FRONT, with no-filter and
+filter_rate (int) cases trailing. That means rebuild=True on a
+no-filter case is wrong when label cases are in the sweep: the label
+cases run first against whatever stale table is already there.
+
+Worse, the rebuilt schema depends on the case that triggers it.
+`with_scalar_labels` is derived from `case.filters.type ==
+FilterOp.StrEqual`, so a rebuild on a no-filter case creates a
+labels-less table -- subsequent label cases fail with `column
+"label" does not exist`. A rebuild on any label_percentage case
+creates the table WITH a `label VARCHAR(64)` column, and all
+downstream cases (label or otherwise) work against it.
+
+Rule of thumb: if any label_percentage case is in CASES, put
+rebuild=True on a label_percentage case (not on the no-filter case).
+The script asserts this at startup.
 
 Connection details (host/port/user/password/db) are CLI flags so the
 script works against any pg_search-running Postgres without editing.
@@ -59,21 +80,26 @@ CONCURRENCY = ConcurrencySearchConfig(
 #     measured against the true top-K among matching docs.
 #   - neither set (or both None): the no-filter case.
 CASES: list[dict] = [
-    dict(
-        rebuild=True,                                 # builds the index
-        vector_cluster_probes=50,
-        vector_rerank_multiplier=1.0,
-        vector_bit_width=5,
-    ),
+    # Rebuild on a label-filter case: creates the table WITH a `label`
+    # column so every other case (label or no-filter) can query it.
     dict(
         label_percentage=0.5,                         # real 50% label filter
-        rebuild=False,                              
+        rebuild=True,
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
         label_percentage=0.01,                        # real 1% label filter
+        rebuild=False,
+        vector_cluster_probes=50,
+        vector_rerank_multiplier=1.0,
+        vector_bit_width=5,
+    ),
+    # No-filter case runs against the same table; the extra `label`
+    # column is harmless because the no-filter query never references
+    # it.
+    dict(
         rebuild=False,
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
@@ -177,6 +203,32 @@ def warn_redundant_rebuilds() -> None:
         prev_bw = bw
 
 
+def assert_rebuild_schema_matches() -> None:
+    """When label_percentage cases are present, the rebuilt table must
+    carry a `label` column -- otherwise downstream label queries fail
+    with `column "label" does not exist`. The schema is set by
+    whichever case actually rebuilds; if that's a no-filter or
+    filter_rate case, with_scalar_labels=False and the column is
+    omitted. Reject CASES that mix a no-filter rebuild with label
+    cases."""
+    has_label_case = any(c.get("label_percentage") is not None for c in CASES)
+    if not has_label_case:
+        return
+    for i, case in enumerate(CASES):
+        if not case["rebuild"]:
+            continue
+        if case.get("label_percentage") is not None:
+            continue
+        raise SystemExit(
+            f"case {i} ({_case_label(case)}) has rebuild=True but is not a "
+            f"label_percentage case. Because the runner sorts label cases to "
+            f"the front, the rebuilt table would lack a `label` column and "
+            f"every label_percentage case would fail with `column \"label\" "
+            f"does not exist`. Move rebuild=True to a label_percentage case "
+            f"in CASES."
+        )
+
+
 @click.command(context_settings={"show_default": True})
 @click.option("--user-name", default="postgres", help="Postgres role")
 @click.option(
@@ -220,6 +272,7 @@ def main(
         db_name=db_name,
     )
     if rebuild:
+        assert_rebuild_schema_matches()
         warn_redundant_rebuilds()
     benchmark_runner.run(build_tasks(db_config, rebuild), task_label=task_label)
     while benchmark_runner.has_running():
