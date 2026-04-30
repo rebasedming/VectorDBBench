@@ -79,44 +79,60 @@ def stages_for(rebuild: bool) -> list[TaskStage]:
     return [TaskStage.SEARCH_SERIAL]
 
 
-tasks: list[TaskConfig] = []
-for case in CASES:
-    case_id = case["case_id"]
-    rebuild = case["rebuild"]
-    index_config = PgSearchIndexConfig(
-        vector_cluster_probes=case["vector_cluster_probes"],
-        vector_rerank_multiplier=case["vector_rerank_multiplier"],
-        vector_bit_width=case["vector_bit_width"],
-    )
-    tasks.append(
-        TaskConfig(
-            db=DB.PgSearch,
-            db_config=DB_CONFIG,
-            db_case_config=index_config,
-            case_config=CaseConfig(
-                case_id=case_id,
-                k=100,
-                concurrency_search_config=CONCURRENCY,
-                custom_case={},
-            ),
-            stages=stages_for(rebuild),
-            load_concurrency=0,
+def build_tasks() -> list[TaskConfig]:
+    tasks: list[TaskConfig] = []
+    for case in CASES:
+        index_config = PgSearchIndexConfig(
+            vector_cluster_probes=case["vector_cluster_probes"],
+            vector_rerank_multiplier=case["vector_rerank_multiplier"],
+            vector_bit_width=case["vector_bit_width"],
         )
-    )
-
-# Sanity check: rebuilding mid-sweep wipes the table, which only makes
-# sense when build-time options actually changed. Warn if a later
-# rebuild repeats the previous task's bit_width.
-prev_bw = None
-for i, case in enumerate(CASES):
-    bw = case["vector_bit_width"]
-    if i > 0 and case["rebuild"] and bw == prev_bw:
-        print(
-            f"  warning: case {i} ({case['case_id'].name}) rebuilds with "
-            f"vector_bit_width={bw}, same as previous case -- wasted load+build"
+        tasks.append(
+            TaskConfig(
+                db=DB.PgSearch,
+                db_config=DB_CONFIG,
+                db_case_config=index_config,
+                case_config=CaseConfig(
+                    case_id=case["case_id"],
+                    k=100,
+                    concurrency_search_config=CONCURRENCY,
+                    custom_case={},
+                ),
+                stages=stages_for(case["rebuild"]),
+                load_concurrency=0,
+            )
         )
-    prev_bw = bw
+    return tasks
 
-benchmark_runner.run(tasks, task_label=TASK_LABEL)
-while benchmark_runner.has_running():
-    time.sleep(1)
+
+def warn_redundant_rebuilds() -> None:
+    """Rebuilding mid-sweep wipes the table -- only makes sense when a
+    build-time option actually changed. Flag a later rebuild that
+    repeats the previous task's bit_width."""
+    prev_bw = None
+    for i, case in enumerate(CASES):
+        bw = case["vector_bit_width"]
+        if i > 0 and case["rebuild"] and bw == prev_bw:
+            print(
+                f"  warning: case {i} ({case['case_id'].name}) rebuilds "
+                f"with vector_bit_width={bw}, same as previous case "
+                f"-- wasted load+build"
+            )
+        prev_bw = bw
+
+
+def main() -> None:
+    warn_redundant_rebuilds()
+    benchmark_runner.run(build_tasks(), task_label=TASK_LABEL)
+    while benchmark_runner.has_running():
+        time.sleep(1)
+
+
+# `interface.py` runs the actual sweep in a ProcessPoolExecutor child
+# process. On Linux/macOS that child uses the `spawn` start method,
+# which re-imports this module from scratch -- so any top-level call
+# to `benchmark_runner.run(...)` would recursively submit another
+# batch in the child, hit the same code, recurse again, and crash
+# with `_check_not_importing_main`. The `__main__` guard blocks that.
+if __name__ == "__main__":
+    main()
