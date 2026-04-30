@@ -67,14 +67,7 @@ CASES: list[dict] = [
     ),
     dict(
         label_percentage=0.5,                         # real 50% label filter
-        rebuild=False,                                # reuse index from above
-        vector_cluster_probes=50,
-        vector_rerank_multiplier=1.0,
-        vector_bit_width=5,
-    ),
-    dict(
-        label_percentage=0.05,                        # real 5% label filter
-        rebuild=False,
+        rebuild=False,                              
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
