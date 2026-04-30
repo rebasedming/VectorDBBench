@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/profile_pg_vector_search_perf.sh DB_URL [options]
+  scripts/profile_vdb.sh DB_URL [options]
 
 Runs a single Postgres backend in a tight vector-search loop and attaches Linux
 perf to that backend PID. Intended for profiling a VectorDBBench-created Cohere
@@ -38,9 +38,9 @@ Options:
   -h, --help               Show this help
 
 Examples:
-  scripts/profile_pg_vector_search_perf.sh "$DATABASE_URL" --duration 60
+  scripts/profile_vdb.sh "$DATABASE_URL" --duration 60
 
-  scripts/profile_pg_vector_search_perf.sh "$DATABASE_URL" \
+  scripts/profile_vdb.sh "$DATABASE_URL" \
     --table public.vdbbench_pg_search --probes 150 --rerank 1.0 \
     --where "AND id >= 10000" --output pgsearch-id-filter.perf.data
 EOF
@@ -197,7 +197,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cat >"$sql_file" <<SQL
-\\set ON_ERROR_STOP on
+\set ON_ERROR_STOP on
 SET client_min_messages = warning;
 SET statement_timeout = 0;
 SET max_parallel_workers_per_gather = 0;
