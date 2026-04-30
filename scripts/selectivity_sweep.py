@@ -44,29 +44,68 @@ CONCURRENCY = ConcurrencySearchConfig(
 )
 
 # One row per (selectivity, tuning) combo. Edit freely.
+#
+# A case dict accepts either:
+#   - filter_rate=<float in (0, 1]>: any filter rate via the
+#     parameterized NewIntFilterPerformanceCase (e.g. 0.5 for 50%
+#     selectivity). The dataset is fixed to Cohere 1M.
+#   - filter_rate=None (or omit): the no-filter Performance768D1M
+#     case.
+#
+# vdbbench's prebuilt 1P / 99P cases cover only filter_rate=0.01 and
+# 0.99; for any other rate (50%, 25%, etc.) use filter_rate=...
+# directly and the script wires NewIntFilterPerformanceCase up for
+# you.
 CASES: list[dict] = [
     dict(
-        case_id=CaseType.Performance768D1M,           # no filter
+        filter_rate=None,                             # no filter
         rebuild=True,                                 # builds the index
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
-        case_id=CaseType.Performance768D1M1P,         # 1% selectivity
+        filter_rate=0.01,                             # 1% selectivity
         rebuild=False,                                # reuse index from above
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
-        case_id=CaseType.Performance768D1M50P,        # 99% selectivity
+        filter_rate=0.5,                              # 50% selectivity
+        rebuild=False,
+        vector_cluster_probes=50,
+        vector_rerank_multiplier=1.0,
+        vector_bit_width=5,
+    ),
+    dict(
+        filter_rate=0.99,                             # 99% selectivity
         rebuild=False,
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
 ]
+
+# DatasetWithSizeType value for Cohere 1M -- threaded into the
+# parameterized NewIntFilterPerformanceCase via custom_case.
+_COHERE_MEDIUM_KEY = "Medium Cohere (768dim, 1M)"
+
+
+def case_for(case: dict) -> tuple[CaseType, dict]:
+    """Resolve (case_id, custom_case) from a CASES entry.
+
+    `filter_rate=None`     -> Performance768D1M (no filter, no custom).
+    `filter_rate=<float>`  -> NewIntFilterPerformanceCase + custom_case
+                              dict carrying the dataset + filter_rate.
+    """
+    fr = case.get("filter_rate")
+    if fr is None:
+        return CaseType.Performance768D1M, {}
+    return CaseType.NewIntFilterPerformanceCase, {
+        "dataset_with_size_type": _COHERE_MEDIUM_KEY,
+        "filter_rate": fr,
+    }
 
 
 def stages_for(rebuild: bool) -> list[TaskStage]:
@@ -88,22 +127,28 @@ def build_tasks(db_config: PgSearchConfig, rebuild: bool) -> list[TaskConfig]:
             vector_rerank_multiplier=case["vector_rerank_multiplier"],
             vector_bit_width=case["vector_bit_width"],
         )
+        case_id, custom_case = case_for(case)
         tasks.append(
             TaskConfig(
                 db=DB.PgSearch,
                 db_config=db_config,
                 db_case_config=index_config,
                 case_config=CaseConfig(
-                    case_id=case["case_id"],
+                    case_id=case_id,
                     k=100,
                     concurrency_search_config=CONCURRENCY,
-                    custom_case={},
+                    custom_case=custom_case,
                 ),
                 stages=stages_for(case_rebuild),
                 load_concurrency=0,
             )
         )
     return tasks
+
+
+def _case_label(case: dict) -> str:
+    fr = case.get("filter_rate")
+    return "no filter" if fr is None else f"filter_rate={fr}"
 
 
 def warn_redundant_rebuilds() -> None:
@@ -115,8 +160,8 @@ def warn_redundant_rebuilds() -> None:
         bw = case["vector_bit_width"]
         if i > 0 and case["rebuild"] and bw == prev_bw:
             print(
-                f"  warning: case {i} ({case['case_id'].name}) rebuilds "
-                f"with vector_bit_width={bw}, same as previous case "
+                f"  warning: case {i} ({_case_label(case)}) rebuilds with "
+                f"vector_bit_width={bw}, same as previous case "
                 f"-- wasted load+build"
             )
         prev_bw = bw
