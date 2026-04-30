@@ -192,6 +192,23 @@ def get_custom_case_config(parameters: dict) -> dict:
             "dataset_with_size_type": parameters["dataset_with_size_type"],
             "label_percentage": parameters["label_percentage"],
         }
+    elif parameters["case_type"] == "StreamingPerformanceCase":
+        cfg = {
+            "dataset_with_size_type": parameters["dataset_with_size_type"],
+            "insert_rate": parameters["insert_rate"],
+            "search_stages": parameters["search_stages"],
+            "concurrencies": parameters["concurrencies"],
+        }
+        # Optional: filtered-streaming variant. label_percentage defaults to
+        # the value used by LabelFilterPerformanceCase; treat as "unset" when
+        # the user does not pass --use-label-filter.
+        if parameters.get("use_label_filter"):
+            cfg["label_percentage"] = parameters["label_percentage"]
+        # Optional: seed-and-build pattern. >0 means bulk-load that fraction
+        # and build the index before streaming starts.
+        if parameters.get("seed_fraction"):
+            cfg["seed_fraction"] = parameters["seed_fraction"]
+        custom_case_config = cfg
     return custom_case_config
 
 
@@ -462,6 +479,60 @@ class CommonTypedDict(TypedDict):
             help="Filter rate for LabelFilterPerformanceCase",
             default=0.01,
             show_default=True,
+        ),
+    ]
+    insert_rate: Annotated[
+        int,
+        click.option(
+            "--insert-rate",
+            help="Insertion rate (rows/s) for StreamingPerformanceCase",
+            default=500,
+            show_default=True,
+        ),
+    ]
+    search_stages: Annotated[
+        list[float],
+        click.option(
+            "--search-stages",
+            help="Comma-separated insertion-progress fractions in [0,1) at "
+            "which to measure recall+QPS (StreamingPerformanceCase)",
+            default="0.5,0.8",
+            show_default=True,
+            callback=lambda *args: [float(x) for x in click_arg_split(*args)],
+        ),
+    ]
+    concurrencies: Annotated[
+        list[int],
+        click.option(
+            "--concurrencies",
+            help="Comma-separated concurrency levels for streaming concurrent "
+            "search (StreamingPerformanceCase)",
+            default="5,10",
+            show_default=True,
+            callback=lambda *args: [int(x) for x in click_arg_split(*args)],
+        ),
+    ]
+    use_label_filter: Annotated[
+        bool,
+        click.option(
+            "--use-label-filter/--no-label-filter",
+            help="Whether to apply a LabelFilter at search time for "
+            "StreamingPerformanceCase. When true, --label-percentage is used.",
+            default=False,
+            show_default=True,
+        ),
+    ]
+    seed_fraction: Annotated[
+        float,
+        click.option(
+            "--seed-fraction",
+            type=float,
+            default=0.0,
+            show_default=True,
+            help="Bulk-insert this fraction of the dataset and build the "
+            "index BEFORE streaming starts (StreamingPerformanceCase). "
+            "Subsequent search stages then measure how the original index "
+            "degrades as further inserts arrive — no rebuilds. 0 disables.",
         ),
     ]
 

@@ -20,7 +20,7 @@ from vectordb_bench.base import BaseModel
 from . import utils
 from .clients import MetricType
 from .data_source import DatasetReader, DatasetSource
-from .filter import Filter, FilterOp, non_filter
+from .filter import Filter, FilterOp, LabelFilter, StreamingLabelFilter, non_filter
 
 log = logging.getLogger(__name__)
 
@@ -305,6 +305,9 @@ class DatasetManager(BaseModel):
     data: BaseDataset
     test_data: list[list[float]] | None = None
     gt_data: list[list[int]] | None = None
+    # Per-stage GTs for streaming + label-filter cases. Keyed by int(stage*100).
+    # Stage 100 reuses gt_data (the static full-dataset GT).
+    gt_data_by_stage: dict[int, list[list[int]]] = {}
     scalar_labels: pl.DataFrame | None = None
     train_files: list[str] = []
     reader: DatasetReader | None = None
@@ -343,6 +346,7 @@ class DatasetManager(BaseModel):
         self,
         source: DatasetSource = DatasetSource.S3,
         filters: Filter = non_filter,
+        streaming_search_stages: list[float] | None = None,
     ) -> bool:
         """Download the dataset from DatasetSource
          url = f"{source}/{self.data.dir_name}"
@@ -351,6 +355,10 @@ class DatasetManager(BaseModel):
             source(DatasetSource): S3 or AliyunOSS, default as S3
             filters(Filter): combined with dataset's with_gt to
               compose the correct ground_truth file
+            streaming_search_stages(list[float] | None): when set together
+              with a LabelFilter, also fetch per-stage GT files (one per
+              stage in (0, 1)) so streaming recall can be measured against
+              the active set at each insertion-progress checkpoint.
 
         Returns:
             bool: whether the dataset is successfully prepared
@@ -360,6 +368,23 @@ class DatasetManager(BaseModel):
         gt_file, test_file = None, None
         if self.data.with_gt:
             gt_file, test_file = filters.groundtruth_file, self.data.test_file
+
+        per_stage_gt_files: list[tuple[int, str]] = []
+        if (
+            streaming_search_stages
+            and isinstance(filters, LabelFilter)
+            and self.data.with_gt
+        ):
+            for s in streaming_search_stages:
+                if s >= 1.0:
+                    continue
+                stage_filter = StreamingLabelFilter(
+                    label_percentage=filters.label_percentage,
+                    stage=s,
+                )
+                per_stage_gt_files.append(
+                    (round(s * 100), stage_filter.groundtruth_file),
+                )
 
         if self.data.with_remote_resource:
             download_files = [file for file in self.train_files]
@@ -372,6 +397,10 @@ class DatasetManager(BaseModel):
                 files=download_files,
                 local_ds_root=self.data_dir,
             )
+            # Per-stage streaming GTs are baked locally and not currently
+            # uploaded to S3, so we don't go through the remote reader for
+            # them — just rely on what's on disk. Missing files fall back
+            # to the static GT at runtime with a warning.
 
         # read scalar_labels_file if separated
         if (
@@ -384,6 +413,18 @@ class DatasetManager(BaseModel):
         if gt_file is not None and test_file is not None:
             self.test_data = self._read_file(test_file)[self.data.test_vector_field].to_list()
             self.gt_data = self._read_file(gt_file)[self.data.gt_neighbors_field].to_list()
+
+        if per_stage_gt_files:
+            self.gt_data_by_stage = {}
+            for stage_int, fname in per_stage_gt_files:
+                df = self._read_file(fname)
+                if df.is_empty():
+                    log.warning(f"per-stage GT missing: {fname} (stage={stage_int})")
+                    continue
+                self.gt_data_by_stage[stage_int] = df[self.data.gt_neighbors_field].to_list()
+            log.info(
+                f"loaded per-stage GTs for stages: {sorted(self.gt_data_by_stage.keys())}"
+            )
 
         log.debug(f"{self.data.name}: available train files {self.train_files}")
 
@@ -421,33 +462,43 @@ class DataSetIterator:
     def __iter__(self):
         return self
 
-    def _get_iter(self, file_name: str):
+    def _get_iter(self, file_name: str, skip_batches: int = 0):
         p = pathlib.Path(self._ds.data_dir, file_name)
-        log.info(f"Get iterator for {p.name}")
+        log.info(f"Get iterator for {p.name} (skip {skip_batches} batches)")
         if not p.exists():
             msg = f"No such file: {p}"
             log.warning(msg)
             raise IndexError(msg)
-        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(config.NUM_PER_BATCH)
+        it = ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(config.NUM_PER_BATCH)
+        # Fast-forward past already-consumed batches when resuming after a
+        # pickle round-trip (the live ParquetFile iterator doesn't survive
+        # __getstate__, so we rebuild and skip what was already yielded).
+        for _ in range(skip_batches):
+            try:
+                next(it)
+            except StopIteration:
+                break
+        return it
 
     def __next__(self) -> pd.DataFrame:
         """return the data in the next file of the training list"""
-        if self._idx < len(self._ds.train_files):
-            if self._cur is None:
-                file_name = self._ds.train_files[self._idx]
-                self._cur = self._get_iter(file_name)
+        if self._idx >= len(self._ds.train_files):
+            raise StopIteration
+        if self._cur is None:
+            file_name = self._ds.train_files[self._idx]
+            self._cur = self._get_iter(file_name, skip_batches=self._sub_idx[self._idx])
 
-            try:
-                return next(self._cur).to_pandas()
-            except StopIteration:
-                if self._idx == len(self._ds.train_files) - 1:
-                    raise StopIteration from None
-
-                self._idx += 1
-                file_name = self._ds.train_files[self._idx]
-                self._cur = self._get_iter(file_name)
-                return next(self._cur).to_pandas()
-        raise StopIteration
+        try:
+            batch = next(self._cur).to_pandas()
+        except StopIteration:
+            if self._idx == len(self._ds.train_files) - 1:
+                raise StopIteration from None
+            self._idx += 1
+            file_name = self._ds.train_files[self._idx]
+            self._cur = self._get_iter(file_name, skip_batches=self._sub_idx[self._idx])
+            batch = next(self._cur).to_pandas()
+        self._sub_idx[self._idx] += 1
+        return batch
 
 
 class Dataset(Enum):

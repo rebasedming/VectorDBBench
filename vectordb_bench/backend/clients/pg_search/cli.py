@@ -42,6 +42,19 @@ class PgSearchTypedDict(CommonTypedDict):
         ),
     ]
     db_name: Annotated[str, click.option("--db-name", type=str, help="Db name", required=True)]
+    table_name: Annotated[
+        str,
+        click.option(
+            "--table-name",
+            type=str,
+            help="Postgres table the run targets (DROP TABLE / CREATE TABLE / "
+            "COPY / SELECT all use this name). Override to keep multiple "
+            "datasets side-by-side in one database (e.g. one table for 1M, "
+            "another for 10M).",
+            default="vdbbench_pg_search",
+            show_default=True,
+        ),
+    ]
     vector_cluster_probes: Annotated[
         int,
         click.option(

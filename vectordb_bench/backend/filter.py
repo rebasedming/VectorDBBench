@@ -91,3 +91,24 @@ class LabelFilter(Filter):
     @property
     def groundtruth_file(self) -> str:
         return f"neighbors_{self.label_field}_{self.label_value}.parquet"
+
+
+class StreamingLabelFilter(LabelFilter):
+    """LabelFilter variant that picks GT for a specific insertion-progress stage.
+
+    `stage` is a fraction in (0, 1] of the dataset that has been inserted at
+    the moment we measure. GT files are baked per-stage so recall is computed
+    against the active set actually present in the index.
+    """
+
+    stage: float
+
+    def __init__(self, label_percentage: float, stage: float, **kwargs):
+        super().__init__(label_percentage=label_percentage, stage=stage, **kwargs)
+
+    @property
+    def groundtruth_file(self) -> str:
+        if self.stage >= 1.0:
+            return super().groundtruth_file
+        s_int = round(self.stage * 100)
+        return f"neighbors_{self.label_field}_{self.label_value}_stage_{s_int}.parquet"

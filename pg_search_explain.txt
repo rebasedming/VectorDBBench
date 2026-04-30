@@ -1,0 +1,30 @@
+-- Self-sampling EXPLAIN. Run via:  psql -f pg_search_explain.txt
+-- Each backslash command must be on its own line.
+
+SELECT embedding AS qvec, label AS qlabel
+FROM public.vdbbench_pg_search
+WHERE label IS NOT NULL
+LIMIT 1
+\gset
+
+EXPLAIN (ANALYZE, BUFFERS, VERBOSE, COSTS OFF)
+SELECT id
+FROM public.vdbbench_pg_search
+WHERE id @@@ paradedb.all()
+  AND label = :'qlabel'
+ORDER BY embedding <=> :'qvec'::vector
+LIMIT 100;
+
+-- Correct plan:
+--   Limit
+--     -> Custom Scan (ParadeDB Scan) on vdbbench_pg_search
+--          Tantivy Query: {"boolean":{"must":[{"all":{}}, {"term":{"field":"label","value":"..."}}]}}
+--          Sort Field: embedding <=> $1
+--
+-- Red flags:
+--   * "Filter: (label = '...')" above the Custom Scan  -> pdb.literal cast missing
+--   * Plain "Sort" node above the scan                 -> wrong opclass / embedding not indexed
+--   * Seq Scan / Bitmap Heap Scan                      -> @@@ paradedb.all() not engaging
+
+SELECT indexdef FROM pg_indexes
+WHERE schemaname = 'public' AND tablename = 'vdbbench_pg_search';

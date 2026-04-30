@@ -140,7 +140,14 @@ class CaseRunner(BaseModel):
     def _pre_run(self, drop_old: bool = True):
         try:
             self.init_db(drop_old)
-            self.ca.dataset.prepare(self.dataset_source, filters=self.ca.filters)
+            streaming_stages = None
+            if self.ca.label == CaseLabel.Streaming:
+                streaming_stages = list(getattr(self.ca, "search_stages", []) or [])
+            self.ca.dataset.prepare(
+                self.dataset_source,
+                filters=self.ca.filters,
+                streaming_search_stages=streaming_stages,
+            )
         except ModuleNotFoundError as e:
             log.warning(f"pre run case error: please install client for db: {self.config.db}, error={e}")
             raise e from None
@@ -359,6 +366,10 @@ class CaseRunner(BaseModel):
             concurrencies=ca.concurrencies,
             k=self.config.case_config.k,
             normalize=self.normalize,
+            filters=ca.filters,
+            label_percentage=getattr(ca, "label_percentage", None),
+            skip_search_concurrent=TaskStage.SEARCH_CONCURRENT not in self.config.stages,
+            seed_fraction=getattr(ca, "seed_fraction", None),
         )
 
     def stop(self):

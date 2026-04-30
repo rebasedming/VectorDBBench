@@ -429,6 +429,8 @@ class StreamingPerformanceCase(Case):
     concurrencies: list[int]
     optimize_after_write: bool = True
     read_dur_after_write: int = 30
+    label_percentage: float | None = None
+    seed_fraction: float | None = None
 
     def __init__(
         self,
@@ -436,6 +438,8 @@ class StreamingPerformanceCase(Case):
         insert_rate: int = 500,
         search_stages: list[float] | str = (0.5, 0.8),
         concurrencies: list[int] | str = (5, 10),
+        label_percentage: float | None = None,
+        seed_fraction: float | None = None,
         **kwargs,
     ):
         num_per_batch = config.NUM_PER_BATCH
@@ -452,10 +456,11 @@ class StreamingPerformanceCase(Case):
         if not isinstance(dataset_with_size_type, DatasetWithSizeType):
             dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
         dataset = dataset_with_size_type.get_manager()
-        name = f"Streaming-Perf - {dataset_with_size_type.value}, {insert_rate} rows/s"
+        label_suffix = f", label={label_percentage*100:.1f}%" if label_percentage is not None else ""
+        name = f"Streaming-Perf - {dataset_with_size_type.value}, {insert_rate} rows/s{label_suffix}"
         description = (
             "This case tests the search performance of vector database while maintaining "
-            f"a fixed insertion speed. (dataset: {dataset_with_size_type.value})"
+            f"a fixed insertion speed. (dataset: {dataset_with_size_type.value}{label_suffix})"
         )
 
         if isinstance(search_stages, str):
@@ -471,8 +476,16 @@ class StreamingPerformanceCase(Case):
             insert_rate=insert_rate,
             search_stages=search_stages,
             concurrencies=concurrencies,
+            label_percentage=label_percentage,
+            seed_fraction=seed_fraction,
             **kwargs,
         )
+
+    @property
+    def filters(self) -> Filter:
+        if self.label_percentage is None:
+            return non_filter
+        return LabelFilter(label_percentage=self.label_percentage)
 
 
 class StreamingCustomDataset(Case):
