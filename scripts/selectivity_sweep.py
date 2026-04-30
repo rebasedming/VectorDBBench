@@ -48,7 +48,7 @@ CASES: list[dict] = [
     dict(
         case_id=CaseType.Performance768D1M,           # no filter
         rebuild=True,                                 # builds the index
-        vector_cluster_probes=20,
+        vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
