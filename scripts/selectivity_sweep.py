@@ -75,9 +75,14 @@ def stages_for(rebuild: bool) -> list[TaskStage]:
     return [TaskStage.SEARCH_SERIAL]
 
 
-def build_tasks(db_config: PgSearchConfig) -> list[TaskConfig]:
+def build_tasks(db_config: PgSearchConfig, rebuild: bool) -> list[TaskConfig]:
     tasks: list[TaskConfig] = []
     for case in CASES:
+        # `--no-rebuild` (rebuild=False) globally overrides the
+        # per-case rebuild flag, forcing search-only on every task.
+        # Useful when the data is already loaded and you just want to
+        # re-run with different per-case query knobs.
+        case_rebuild = case["rebuild"] if rebuild else False
         index_config = PgSearchIndexConfig(
             vector_cluster_probes=case["vector_cluster_probes"],
             vector_rerank_multiplier=case["vector_rerank_multiplier"],
@@ -94,7 +99,7 @@ def build_tasks(db_config: PgSearchConfig) -> list[TaskConfig]:
                     concurrency_search_config=CONCURRENCY,
                     custom_case={},
                 ),
-                stages=stages_for(case["rebuild"]),
+                stages=stages_for(case_rebuild),
                 load_concurrency=0,
             )
         )
@@ -134,6 +139,14 @@ def warn_redundant_rebuilds() -> None:
     "(result_<date>_<task_label>_pgsearch.json) and groups all cases "
     "in this run into the same JSON.",
 )
+@click.option(
+    "--rebuild/--no-rebuild",
+    default=True,
+    help="--rebuild (default) respects each case's per-case `rebuild` "
+    "field in CASES. --no-rebuild forces search-only on every case "
+    "(skips drop/load/build everywhere) -- requires the index to "
+    "already exist. Useful when iterating on query-time knobs.",
+)
 def main(
     user_name: str,
     password: str,
@@ -141,6 +154,7 @@ def main(
     port: int,
     db_name: str,
     task_label: str,
+    rebuild: bool,
 ) -> None:
     db_config = PgSearchConfig(
         db_label=task_label,
@@ -150,8 +164,9 @@ def main(
         port=port,
         db_name=db_name,
     )
-    warn_redundant_rebuilds()
-    benchmark_runner.run(build_tasks(db_config), task_label=task_label)
+    if rebuild:
+        warn_redundant_rebuilds()
+    benchmark_runner.run(build_tasks(db_config, rebuild), task_label=task_label)
     while benchmark_runner.has_running():
         time.sleep(1)
 
