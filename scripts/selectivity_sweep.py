@@ -45,41 +45,42 @@ CONCURRENCY = ConcurrencySearchConfig(
 
 # One row per (selectivity, tuning) combo. Edit freely.
 #
-# A case dict accepts either:
-#   - filter_rate=<float in (0, 1]>: any filter rate via the
-#     parameterized NewIntFilterPerformanceCase (e.g. 0.5 for 50%
-#     selectivity). The dataset is fixed to Cohere 1M.
-#   - filter_rate=None (or omit): the no-filter Performance768D1M
-#     case.
-#
-# vdbbench's prebuilt 1P / 99P cases cover only filter_rate=0.01 and
-# 0.99; for any other rate (50%, 25%, etc.) use filter_rate=...
-# directly and the script wires NewIntFilterPerformanceCase up for
-# you.
+# Each case picks a filter shape. Set at most ONE of:
+#   - filter_rate=<float>: synthetic int filter on the primary key
+#     (`WHERE id >= filter_rate * dataset_size`). filter_rate is the
+#     fraction of docs filtered OUT; 0.5 selects 50% of docs by id.
+#     Useful for any rate but doesn't reflect a real categorical
+#     filter pattern.
+#   - label_percentage=<float>: real string filter on the `labels`
+#     column (`WHERE labels = 'label_50p'`). The dataset comes
+#     pre-tagged at fixed percentages -- pick one of:
+#         0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5
+#     Each has a pre-computed ground truth file, so recall is
+#     measured against the true top-K among matching docs.
+#   - neither set (or both None): the no-filter case.
 CASES: list[dict] = [
     dict(
-        filter_rate=None,                             # no filter
         rebuild=True,                                 # builds the index
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
-        filter_rate=0.01,                             # 1% selectivity
+        label_percentage=0.5,                         # real 50% label filter
         rebuild=False,                                # reuse index from above
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
-        filter_rate=0.5,                              # 50% selectivity
+        label_percentage=0.05,                        # real 5% label filter
         rebuild=False,
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
-        filter_rate=0.99,                             # 99% selectivity
+        label_percentage=0.01,                        # real 1% label filter
         rebuild=False,
         vector_cluster_probes=50,
         vector_rerank_multiplier=1.0,
@@ -88,24 +89,35 @@ CASES: list[dict] = [
 ]
 
 # DatasetWithSizeType value for Cohere 1M -- threaded into the
-# parameterized NewIntFilterPerformanceCase via custom_case.
+# parameterized cases via custom_case.
 _COHERE_MEDIUM_KEY = "Medium Cohere (768dim, 1M)"
 
 
 def case_for(case: dict) -> tuple[CaseType, dict]:
     """Resolve (case_id, custom_case) from a CASES entry.
 
-    `filter_rate=None`     -> Performance768D1M (no filter, no custom).
-    `filter_rate=<float>`  -> NewIntFilterPerformanceCase + custom_case
-                              dict carrying the dataset + filter_rate.
+    Picks NewIntFilterPerformanceCase for filter_rate, or
+    LabelFilterPerformanceCase for label_percentage. Both unset =
+    no-filter Performance768D1M.
     """
     fr = case.get("filter_rate")
-    if fr is None:
-        return CaseType.Performance768D1M, {}
-    return CaseType.NewIntFilterPerformanceCase, {
-        "dataset_with_size_type": _COHERE_MEDIUM_KEY,
-        "filter_rate": fr,
-    }
+    lp = case.get("label_percentage")
+    if fr is not None and lp is not None:
+        raise ValueError(
+            f"case has both filter_rate={fr} and label_percentage={lp}; "
+            f"set at most one"
+        )
+    if lp is not None:
+        return CaseType.LabelFilterPerformanceCase, {
+            "dataset_with_size_type": _COHERE_MEDIUM_KEY,
+            "label_percentage": lp,
+        }
+    if fr is not None:
+        return CaseType.NewIntFilterPerformanceCase, {
+            "dataset_with_size_type": _COHERE_MEDIUM_KEY,
+            "filter_rate": fr,
+        }
+    return CaseType.Performance768D1M, {}
 
 
 def stages_for(rebuild: bool) -> list[TaskStage]:
@@ -148,7 +160,12 @@ def build_tasks(db_config: PgSearchConfig, rebuild: bool) -> list[TaskConfig]:
 
 def _case_label(case: dict) -> str:
     fr = case.get("filter_rate")
-    return "no filter" if fr is None else f"filter_rate={fr}"
+    lp = case.get("label_percentage")
+    if lp is not None:
+        return f"label_percentage={lp}"
+    if fr is not None:
+        return f"filter_rate={fr}"
+    return "no filter"
 
 
 def warn_redundant_rebuilds() -> None:
