@@ -99,6 +99,7 @@ call_graph="dwarf"
 output="perf-pg-vector.data"
 start_delay=5
 use_sudo=1
+used_sudo=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -245,11 +246,15 @@ if [[ $use_sudo -eq 1 && $EUID -ne 0 ]]; then
   require_cmd sudo
   echo "running perf via sudo..."
   perf_cmd=(sudo -n "${perf_cmd[@]}")
+  used_sudo=1
 fi
 
 echo "backend PID: $backend_pid"
 echo "recording perf for ${duration}s -> $output"
 "${perf_cmd[@]}"
+if [[ $used_sudo -eq 1 ]]; then
+  sudo -n chown "$(id -u):$(id -g)" "$output"
+fi
 
 echo "done."
 echo "Inspect with: perf report -i '$output'"
