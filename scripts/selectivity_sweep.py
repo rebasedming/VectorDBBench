@@ -56,14 +56,14 @@ CASES: list[dict] = [
         case_id=CaseType.Performance768D1M1P,         # 1% selectivity
         rebuild=False,                                # reuse index from above
         vector_cluster_probes=50,
-        vector_rerank_multiplier=1.5,
+        vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
     dict(
-        case_id=CaseType.Performance768D1M99P,        # 99% selectivity
+        case_id=CaseType.Performance768D1M50P,        # 99% selectivity
         rebuild=False,
-        vector_cluster_probes=150,
-        vector_rerank_multiplier=2.0,
+        vector_cluster_probes=50,
+        vector_rerank_multiplier=1.0,
         vector_bit_width=5,
     ),
 ]
