@@ -11,9 +11,16 @@ later case where a BUILD-TIME option changes (vector_bit_width is the
 only one of those today). Query-time knobs (vector_cluster_probes,
 vector_rerank_multiplier) don't need a rebuild -- flip them per case
 freely.
+
+Connection details (host/port/user/password/db) are CLI flags so the
+script works against any pg_search-running Postgres without editing.
+Edit the CASES list below to change the sweep itself.
 """
 
+import os
 import time
+
+import click
 from pydantic import SecretStr
 
 from vectordb_bench.backend.clients import DB
@@ -28,17 +35,6 @@ from vectordb_bench.models import (
     ConcurrencySearchConfig,
     TaskConfig,
     TaskStage,
-)
-
-TASK_LABEL = "selectivity_sweep"
-
-DB_CONFIG = PgSearchConfig(
-    db_label=TASK_LABEL,
-    user_name=SecretStr("mingying"),
-    password=SecretStr(""),
-    host="localhost",
-    port=28818,
-    db_name="pg_search",
 )
 
 CONCURRENCY = ConcurrencySearchConfig(
@@ -79,7 +75,7 @@ def stages_for(rebuild: bool) -> list[TaskStage]:
     return [TaskStage.SEARCH_SERIAL]
 
 
-def build_tasks() -> list[TaskConfig]:
+def build_tasks(db_config: PgSearchConfig) -> list[TaskConfig]:
     tasks: list[TaskConfig] = []
     for case in CASES:
         index_config = PgSearchIndexConfig(
@@ -90,7 +86,7 @@ def build_tasks() -> list[TaskConfig]:
         tasks.append(
             TaskConfig(
                 db=DB.PgSearch,
-                db_config=DB_CONFIG,
+                db_config=db_config,
                 db_case_config=index_config,
                 case_config=CaseConfig(
                     case_id=case["case_id"],
@@ -121,9 +117,41 @@ def warn_redundant_rebuilds() -> None:
         prev_bw = bw
 
 
-def main() -> None:
+@click.command(context_settings={"show_default": True})
+@click.option("--user-name", default="postgres", help="Postgres role")
+@click.option(
+    "--password",
+    default=lambda: os.environ.get("POSTGRES_PASSWORD", ""),
+    help="Postgres password (default: $POSTGRES_PASSWORD or empty)",
+)
+@click.option("--host", default="localhost", help="Postgres host")
+@click.option("--port", type=int, default=5432, help="Postgres port")
+@click.option("--db-name", default="postgres", help="Postgres database")
+@click.option(
+    "--task-label",
+    default="selectivity_sweep",
+    help="Task label -- controls the output file name "
+    "(result_<date>_<task_label>_pgsearch.json) and groups all cases "
+    "in this run into the same JSON.",
+)
+def main(
+    user_name: str,
+    password: str,
+    host: str,
+    port: int,
+    db_name: str,
+    task_label: str,
+) -> None:
+    db_config = PgSearchConfig(
+        db_label=task_label,
+        user_name=SecretStr(user_name),
+        password=SecretStr(password),
+        host=host,
+        port=port,
+        db_name=db_name,
+    )
     warn_redundant_rebuilds()
-    benchmark_runner.run(build_tasks(), task_label=TASK_LABEL)
+    benchmark_runner.run(build_tasks(db_config), task_label=task_label)
     while benchmark_runner.has_running():
         time.sleep(1)
 
