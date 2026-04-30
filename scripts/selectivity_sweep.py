@@ -6,11 +6,22 @@ Per-case `rebuild` flag controls whether DROP_OLD+LOAD prepends the
 search stage:
   - True  -> drop, reload, build the index, then search
   - False -> reuse whatever is already in Postgres, just search
-Set rebuild=True on whichever case will actually run first (see note
-below) and for any later case where a BUILD-TIME option changes
-(vector_bit_width is the only one of those today). Query-time knobs
-(vector_cluster_probes, vector_rerank_multiplier) don't need a
-rebuild -- flip them per case freely.
+
+You only need to rebuild when:
+  1. No table exists yet (first run on a fresh Postgres).
+  2. A build-time index option changes -- today that's vector_bit_width,
+     which is baked into the cluster file at build time.
+  3. The labels schema flips. The pg_search client adds a `label
+     VARCHAR(64)` column when the rebuilding case is a
+     label_percentage (StrEqual filter) case, omits it otherwise. So
+     a no-filter / filter_rate rebuild produces a labels-less table
+     that breaks any subsequent label_percentage case.
+
+You do NOT need to rebuild between different label_percentage values
+(50% vs 5% vs 1% etc.) -- they all match against the same `label`
+column populated once at load time, just with different equality
+literals (label_50p, label_5p, label_1p, ...). Same for varying
+filter_rate values, and for any query-time knob (probes, rerank).
 
 ** Important: the Assembler reorders tasks. **
 
