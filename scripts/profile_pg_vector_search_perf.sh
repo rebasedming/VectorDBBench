@@ -243,9 +243,8 @@ done
 perf_cmd=(perf record -F "$frequency" -g --call-graph "$call_graph" -p "$backend_pid" -o "$output" -- sleep "$duration")
 if [[ $use_sudo -eq 1 && $EUID -ne 0 ]]; then
   require_cmd sudo
-  echo "requesting sudo for perf..."
-  sudo -v
-  perf_cmd=(sudo "${perf_cmd[@]}")
+  echo "running perf via sudo..."
+  perf_cmd=(sudo -n "${perf_cmd[@]}")
 fi
 
 echo "backend PID: $backend_pid"
